@@ -2,7 +2,9 @@ package mqttc
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -135,16 +137,70 @@ func (c *v3Client) Publish(ctx context.Context, topic string, qos byte, retain b
 	return tok.Error()
 }
 
+// Subscribe sends SUBSCRIBE and waits for the SUBACK. If the connection
+// drops in that window paho fails the pending token instead of re-sending
+// after the auto-reconnect, so connection-state failures are retried here.
 func (c *v3Client) Subscribe(ctx context.Context, filter string, qos byte) error {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			if werr := c.awaitReconnect(ctx); werr != nil {
+				return err
+			}
+		}
+		if err = c.subscribeOnce(filter, qos); err == nil {
+			c.subs.add(filter, qos)
+			return nil
+		}
+		if !subRetryable(err) {
+			return err
+		}
+	}
+	return err
+}
+
+// errSubscribeTimeout marks a SUBACK that never arrived, e.g. because paho
+// dropped the SUBSCRIBE during connect finalisation. Safe to retry.
+var errSubscribeTimeout = errors.New("timed out waiting for SUBACK")
+
+func (c *v3Client) subscribeOnce(filter string, qos byte) error {
 	tok := c.client.Subscribe(filter, qos, c.onMessage)
 	if !tok.WaitTimeout(10 * time.Second) {
-		return fmt.Errorf("subscribe to %s timed out", filter)
+		return fmt.Errorf("subscribe to %s: %w", filter, errSubscribeTimeout)
 	}
-	if err := tok.Error(); err != nil {
-		return err
+	return tok.Error()
+}
+
+// subRetryable reports whether a subscribe failed because of connection
+// state rather than a broker refusal. Apart from ErrNotConnected, paho
+// returns these as untyped errors, so they are matched by text.
+func subRetryable(err error) bool {
+	if errors.Is(err, paho3.ErrNotConnected) || errors.Is(err, errSubscribeTimeout) {
+		return true
 	}
-	c.subs.add(filter, qos)
-	return nil
+	s := err.Error()
+	return strings.Contains(s, "connection lost before") ||
+		strings.Contains(s, "not currently connected") ||
+		strings.Contains(s, "reconnecting state")
+}
+
+// awaitReconnect waits for paho's auto-reconnect to restore the connection.
+func (c *v3Client) awaitReconnect(ctx context.Context) error {
+	deadline := time.After(30 * time.Second)
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			return fmt.Errorf("connection not restored within 30s")
+		case <-tick.C:
+			if c.client.IsConnectionOpen() {
+				return nil
+			}
+		}
+	}
 }
 
 func (c *v3Client) Unsubscribe(ctx context.Context, filter string) error {

@@ -2,6 +2,7 @@ package mqttc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -158,15 +159,41 @@ func (c *v5Client) Publish(ctx context.Context, topic string, qos byte, retain b
 	return err
 }
 
+// Subscribe sends SUBSCRIBE and waits for the SUBACK. A connection drop in
+// that window leaves the request hanging (paho.golang does not fail or
+// re-send it after autopaho reconnects), so each attempt gets its own
+// timeout and connection-state failures are retried. A retry can duplicate
+// a SUBSCRIBE the broker already processed; that is idempotent.
 func (c *v5Client) Subscribe(ctx context.Context, filter string, qos byte) error {
-	_, err := c.cm.Subscribe(ctx, &paho.Subscribe{
-		Subscriptions: []paho.SubscribeOptions{{Topic: filter, QoS: qos}},
-	})
-	if err != nil {
-		return err
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			awaitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			werr := c.cm.AwaitConnection(awaitCtx)
+			cancel()
+			if werr != nil {
+				return err
+			}
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		_, err = c.cm.Subscribe(attemptCtx, &paho.Subscribe{
+			Subscriptions: []paho.SubscribeOptions{{Topic: filter, QoS: qos}},
+		})
+		cancel()
+		if err == nil {
+			c.subs.add(filter, qos)
+			return nil
+		}
+		if ctx.Err() != nil {
+			return err
+		}
+		if !errors.Is(err, autopaho.ConnectionDownError) &&
+			!errors.Is(err, paho.ErrConnectionLost) &&
+			!errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
 	}
-	c.subs.add(filter, qos)
-	return nil
+	return err
 }
 
 func (c *v5Client) Unsubscribe(ctx context.Context, filter string) error {
