@@ -19,7 +19,7 @@ A terminal MQTT explorer written in Go with [Bubble Tea](https://github.com/char
 ## Features
 
 - **All common connection types**: MQTT 3.1, 3.1.1 and 5.0, over TCP, TLS, WebSocket and secure WebSocket (`tcp://`, `ssl://`, `mqtt://`, `mqtts://`, `ws://`, `wss://`), with username/password, custom CA, mutual TLS client certificates, last will, keep-alive and automatic reconnect with resubscribe.
-- **Live topic tree** with per-branch topic/message counts, payload previews, retained badges, expand/collapse, and case-insensitive filtering.
+- **Live topic tree** with per-branch topic/message counts, payload previews, retained badges, expand/collapse, and case-insensitive filtering. Rows briefly flash when a topic receives a message (a collapsed branch flashes on any activity beneath it).
 - **Full mouse support**: click to select and expand topics, right-click to publish, wheel scrolling in every pane, clickable profiles, buttons, toggles and form fields.
 - **Payload decoding**, automatic or forced per topic:
   - JSON (pretty-printed)

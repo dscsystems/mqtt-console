@@ -20,6 +20,37 @@ func paths(nodes []*Node) []string {
 	return out
 }
 
+func TestLastActivityPropagatesToAncestors(t *testing.T) {
+	s := New()
+	t0 := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	s.Add(mqttc.Message{Topic: "home/kitchen/temp", Payload: []byte("21"), Time: t0})
+
+	// Leaf and every ancestor carry the message time so a collapsed branch
+	// still flashes on activity.
+	for _, p := range []string{"home", "home/kitchen", "home/kitchen/temp"} {
+		if n := s.Get(p); n == nil || !n.LastActivity.Equal(t0) {
+			t.Errorf("LastActivity(%q) = %v, want %v", p, nodeActivity(n), t0)
+		}
+	}
+
+	// A newer message on a sibling must not backdate the untouched branch.
+	t1 := t0.Add(time.Second)
+	s.Add(mqttc.Message{Topic: "home/hall/temp", Payload: []byte("19"), Time: t1})
+	if n := s.Get("home/kitchen/temp"); !n.LastActivity.Equal(t0) {
+		t.Errorf("kitchen/temp LastActivity = %v, want unchanged %v", n.LastActivity, t0)
+	}
+	if n := s.Get("home"); !n.LastActivity.Equal(t1) {
+		t.Errorf("home LastActivity = %v, want bumped to %v", n.LastActivity, t1)
+	}
+}
+
+func nodeActivity(n *Node) any {
+	if n == nil {
+		return "<nil node>"
+	}
+	return n.LastActivity
+}
+
 func TestAddAndFlatten(t *testing.T) {
 	s := New()
 	s.Add(msg("home/kitchen/temp", "21"))

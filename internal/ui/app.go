@@ -60,6 +60,7 @@ type msgBatchMsg []mqttc.Message
 type eventMsg mqttc.Event
 type pumpClosedMsg struct{}
 type tickMsg struct{}
+type flashTickMsg struct{}
 
 // --- commands -------------------------------------------------------------
 
@@ -124,6 +125,12 @@ func listenEvents(ch <-chan mqttc.Event) tea.Cmd {
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+// flashTickCmd drives the tree-row flash decay at a finer cadence than the
+// one-second clock tick. It only runs while a flash is active.
+func flashTickCmd() tea.Cmd {
+	return tea.Tick(flashInterval, func(time.Time) tea.Msg { return flashTickMsg{} })
 }
 
 // --- tea.Model ------------------------------------------------------------
@@ -242,7 +249,24 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.browser.ingest(msg)
-		return a, listenMessages(a.browser.client.Messages())
+		return a, tea.Batch(
+			listenMessages(a.browser.client.Messages()),
+			a.browser.ensureFlashTick(),
+		)
+
+	case flashTickMsg:
+		if a.screen != screenBrowser || a.browser == nil || !a.browser.flashTicking {
+			if a.browser != nil {
+				a.browser.flashTicking = false
+			}
+			return a, nil
+		}
+		if a.browser.anyFlashing() {
+			return a, flashTickCmd() // keep ticking; this Update repaints the decay
+		}
+		// One final repaint clears the last flash, then the loop stops.
+		a.browser.flashTicking = false
+		return a, nil
 
 	case eventMsg:
 		if a.browser == nil {

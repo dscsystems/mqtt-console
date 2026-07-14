@@ -31,6 +31,7 @@ type Node struct {
 	SubtreeTopics int             // distinct message-bearing topics in subtree
 	History       []mqttc.Message // newest last, capped at HistoryLimit
 	LastPayload   []byte
+	LastActivity  time.Time // time of the most recent message in this subtree
 }
 
 // HasData reports whether this exact topic has received messages.
@@ -117,6 +118,7 @@ func (s *Store) Add(m mqttc.Message) *Node {
 	}
 	for p := node; p != nil; p = p.Parent {
 		p.SubtreeMsgs++
+		p.LastActivity = m.Time
 		if firstData {
 			p.SubtreeTopics++
 		}

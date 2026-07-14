@@ -19,6 +19,23 @@ var (
 	stKey      = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 	stRetained = lipgloss.NewStyle().Foreground(colBadgeFg).Background(colWarn).Padding(0, 1)
 
+	// stFlash brightens the text of a tree row that just received a message.
+	// The peak (index 0) matches the "MQTT Console" title look (accent + bold);
+	// the ramp fades adaptively — toward grey on a light terminal (staying
+	// readable) and toward dark blue on a dark one — ending on colDim so the
+	// last frame blends into the normal text. Foreground-only, so it composes
+	// with the selected row's reverse-video highlight (a selected row keeps its
+	// background and still flashes).
+	stFlash = []lipgloss.Style{
+		lipgloss.NewStyle().Foreground(colAccent).Bold(true),
+		lipgloss.NewStyle().Foreground(colAccent),
+		lipgloss.NewStyle().Foreground(colAccent),
+		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "67", Dark: "38"}),
+		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "103", Dark: "32"}),
+		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "145", Dark: "66"}),
+		lipgloss.NewStyle().Foreground(colDim),
+	}
+
 	stHeader = lipgloss.NewStyle().Bold(true)
 	stBorder = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
