@@ -83,6 +83,27 @@ type browserModel struct {
 	dropped  int // messages skipped while paused
 	status   string
 	statusAt time.Time
+
+	flashTicking bool // a flash-decay tick loop is currently scheduled
+}
+
+// Flash timing for the tree-row activity highlight.
+const (
+	flashDuration = 280 * time.Millisecond
+	flashInterval = 40 * time.Millisecond
+)
+
+// flashStyleFor returns the flash style for a row whose last activity was age
+// ago, and whether it should flash at all.
+func flashStyleFor(age time.Duration) (lipgloss.Style, bool) {
+	if age < 0 || age >= flashDuration {
+		return lipgloss.Style{}, false
+	}
+	idx := int(age * time.Duration(len(stFlash)) / flashDuration)
+	if idx >= len(stFlash) {
+		idx = len(stFlash) - 1
+	}
+	return stFlash[idx], true
 }
 
 func newBrowserModel(client mqttc.Client, profile config.Connection, z *zone.Manager, width, height int) *browserModel {
@@ -460,6 +481,29 @@ func (m *browserModel) boundScroll() {
 	if m.treeOffset < 0 {
 		m.treeOffset = 0
 	}
+}
+
+// anyFlashing reports whether any currently visible row is still within its
+// flash window (only visible rows need repainting).
+func (m *browserModel) anyFlashing() bool {
+	now := time.Now()
+	end := min(len(m.rows), m.treeOffset+m.treeHeight())
+	for i := m.treeOffset; i < end; i++ {
+		if now.Sub(m.rows[i].LastActivity) < flashDuration {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureFlashTick starts the flash-decay tick loop if a flash is active and no
+// loop is already running. Returns nil otherwise, so it is safe in tea.Batch.
+func (m *browserModel) ensureFlashTick() tea.Cmd {
+	if m.flashTicking || !m.anyFlashing() {
+		return nil
+	}
+	m.flashTicking = true
+	return flashTickCmd()
 }
 
 func treeRowZoneID(i int) string { return fmt.Sprintf("browser:row:%d", i) }
@@ -931,11 +975,23 @@ func (m *browserModel) treeView() string {
 	end := min(len(m.rows), m.treeOffset+h)
 	var b strings.Builder
 	width := m.treeWidth() - 2
+	now := time.Now()
 	for i := m.treeOffset; i < end; i++ {
 		n := m.rows[i]
-		line := m.treeRow(n, width)
-		if i == m.cursor {
-			line = stSelected.Render(line)
+		fstyle, flashing := flashStyleFor(now.Sub(n.LastActivity))
+		selected := i == m.cursor
+		// Render the row plain when it will be wrapped, so inner colour resets
+		// don't break the flash foreground or the selected background.
+		line := m.treeRow(n, width, !flashing && !selected)
+		if flashing || selected {
+			st := lipgloss.NewStyle()
+			if flashing {
+				st = fstyle // brighten the text
+			}
+			if selected {
+				st = st.Reverse(true) // keep the highlight; flash becomes its background
+			}
+			line = st.Render(line)
 		}
 		b.WriteString(m.z.Mark(treeRowZoneID(i), line))
 		if i < end-1 {
@@ -945,7 +1001,7 @@ func (m *browserModel) treeView() string {
 	return b.String()
 }
 
-func (m *browserModel) treeRow(n *store.Node, width int) string {
+func (m *browserModel) treeRow(n *store.Node, width int, styled bool) string {
 	indent := strings.Repeat("  ", n.Depth-1)
 	glyph := "  "
 	if len(n.Children()) > 0 {
@@ -973,7 +1029,11 @@ func (m *browserModel) treeRow(n *store.Node, width int) string {
 	if suffix != "" {
 		avail := width - lipgloss.Width(line) - 1
 		if avail > 4 {
-			line += " " + stDim.Render(truncate(suffix, avail))
+			s := truncate(suffix, avail)
+			if styled {
+				s = stDim.Render(s)
+			}
+			line += " " + s
 		}
 	}
 	return truncate(line, width)
